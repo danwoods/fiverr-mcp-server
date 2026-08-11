@@ -8,26 +8,14 @@ import sys
 from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 # Global state for MCP subprocess and clients
 mcp_process: Optional[subprocess.Popen] = None
-client_queues: Dict[str, asyncio.Queue] = {}
 message_id_counter = 0
-
-
-class MCPMessage(BaseModel):
-    """MCP protocol message."""
-    jsonrpc: str = "2.0"
-    id: Optional[int] = None
-    method: Optional[str] = None
-    params: Optional[Dict[str, Any]] = None
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[Dict[str, Any]] = None
 
 
 def start_mcp_subprocess():
@@ -39,6 +27,8 @@ def start_mcp_subprocess():
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
             env={"TRANSPORT": "stdio"},
         )
     return mcp_process
@@ -59,14 +49,14 @@ def send_mcp_message(message: Dict[str, Any]) -> Dict[str, Any]:
     
     try:
         # Send message to subprocess
-        message_bytes = (json.dumps(message) + "\n").encode()
-        process.stdin.write(message_bytes)
+        message_json = json.dumps(message)
+        process.stdin.write(message_json + "\n")
         process.stdin.flush()
         
         # Read response
         response_line = process.stdout.readline()
         if response_line:
-            response = json.loads(response_line.decode())
+            response = json.loads(response_line)
             return response
         else:
             return {"jsonrpc": "2.0", "id": message.get("id"), "error": {"code": -32603, "message": "Internal error"}}
@@ -92,15 +82,28 @@ app = FastAPI(title="Fiverr MCP Server", lifespan=lifespan)
 
 
 @app.get("/")
+@app.post("/")
 async def root():
     """Health check endpoint."""
     return {"status": "ok", "service": "Fiverr MCP Server"}
 
 
 @app.get("/mcp")
-async def mcp_sse():
-    """SSE endpoint for n8n MCP Client node."""
+@app.post("/mcp")
+async def mcp_sse(request: Request):
+    """SSE endpoint for n8n MCP Client node. Accepts both GET and POST."""
     
+    # Check if this is a POST with JSON body (tool execution)
+    if request.method == "POST":
+        try:
+            body = await request.json()
+            response = send_mcp_message(body)
+            return response
+        except Exception as e:
+            logger.error(f"Error handling POST /mcp: {e}")
+            return {"error": str(e)}, 500
+    
+    # GET request - return SSE stream
     async def event_generator():
         """Stream MCP protocol messages as SSE."""
         try:
@@ -152,19 +155,18 @@ async def mcp_sse():
 
 
 @app.post("/mcp/message")
-async def mcp_message(message: Dict[str, Any]):
+async def mcp_message(request: Request):
     """Handle MCP protocol messages from n8n."""
     try:
-        # Send message to MCP server and return response
+        message = await request.json()
         response = send_mcp_message(message)
         return response
     except Exception as e:
         logger.error(f"Error handling MCP message: {e}")
         return {
             "jsonrpc": "2.0",
-            "id": message.get("id"),
             "error": {"code": -32603, "message": str(e)}
-        }
+        }, 500
 
 
 def run_http_server(host: str = "0.0.0.0", port: int = 8000):
