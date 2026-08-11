@@ -17,6 +17,7 @@ MCP server for searching and browsing Fiverr - gigs, sellers, pricing, and revie
 - All prices returned in **USD** (not cents)
 - Built-in **rate limiting** and retry with browser fingerprint rotation
 - Structured **error messages** on failures (no raw crashes)
+- **HTTP server mode** for integration with n8n and other platforms
 
 ## Installation
 
@@ -70,9 +71,23 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TRANSPORT` | Transport mode (`stdio` or `sse`) | `stdio` |
+| `TRANSPORT` | Transport mode (`stdio`, `sse`, or `http`) | `stdio` |
+| `PORT` | Port for HTTP server (only used with `TRANSPORT=http`) | `8000` |
 | `PROXY_URL` | Optional HTTP proxy for requests | - |
 | `RATE_LIMIT_DELAY` | Minimum seconds between requests | `2` |
+
+### Using with n8n
+
+To use this server with n8n's MCP Client node, run it in HTTP mode:
+
+```bash
+TRANSPORT=http PORT=8000 uv run fiverr-mcp-server
+```
+
+Then configure your n8n MCP Client credentials:
+- **Connection Type:** SSE
+- **URL:** `http://your-server:8000/mcp`
+- **No authentication needed**
 
 ## Available Tools
 
@@ -158,3 +173,4 @@ uv run fiverr-mcp-server
 ## License
 
 MIT
+
